@@ -1,0 +1,67 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+
+const char* ssid = "garden";
+const char* password = "Qwer.1234";
+const char* serverUrl = "http://iot.kllew.fun:5002/data";
+
+const int sensor_pin = 32;
+const int relay_pin = 5;
+
+void setup() {
+    Serial.begin(115200);
+    pinMode(relay_pin, OUTPUT);
+    digitalWrite(relay_pin, HIGH); // Initialize pump as OFF (assuming HIGH is OFF)
+    
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.println("Connecting to WiFi...");
+    }
+    Serial.println("Connected to WiFi");
+}
+
+void loop() {
+    // Read sensor data
+    int sensor_analog = analogRead(sensor_pin);
+    int moisture = (100 - ((sensor_analog / 4095.00) * 100));
+    
+    // Control pump based on moisture
+    if (moisture > 10) {  // If too dry
+        digitalWrite(relay_pin, HIGH);  // Turn pump ON
+    } else if (moisture < 25) {  // If wet enough
+        digitalWrite(relay_pin, LOW);  // Turn pump OFF
+    }
+    
+    bool pump_status = digitalRead(relay_pin) == LOW;  // TRUE if pump is ON
+    
+    // Send data to cloud server
+    if (WiFi.status() == WL_CONNECTED) {
+        HTTPClient http;
+        http.begin(serverUrl);
+        http.addHeader("Content-Type", "application/json");
+        
+        // Create JSON payload
+        StaticJsonDocument<200> doc;
+        doc["moisture"] = moisture;
+        doc["pump_status"] = pump_status;
+        doc["sensor_value"] = sensor_analog;
+        
+        String jsonData;
+        serializeJson(doc, jsonData);
+        
+        int httpResponseCode = http.POST(jsonData);
+        
+        if (httpResponseCode > 0) {
+            Serial.print("HTTP Response code: ");
+            Serial.println(httpResponseCode);
+        } else {
+            Serial.print("Error code: ");
+            Serial.println(httpResponseCode);
+        }
+        http.end();
+    }
+    
+    delay(5000);  // Send data every 5 seconds
+}
