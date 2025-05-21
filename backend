@@ -1,0 +1,486 @@
+from flask import Flask, request, jsonify, render_template_string
+from datetime import datetime
+import os
+
+app = Flask(__name__)
+
+# Store the latest data
+latest_data = {
+    "moisture": 0,
+    "pump_status": False,
+    "sensor_value": 0,
+    "timestamp": None
+}
+
+# HTML Template (similar to your local version but adapted for cloud)
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloud Soil Moisture Monitor</title>
+  <style>
+    :root {
+      --primary: #4CAF50;
+      --secondary: #2196F3;
+      --background: #f5f5f5;
+      --card-bg: #ffffff;
+      --text: #333333;
+      --danger: #f44336;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: var(--background);
+      margin: 0;
+      padding: 0;
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    header {
+      background-color: var(--primary);
+      color: white;
+      padding: 16px;
+      border-radius: 8px 8px 0 0;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 500;
+    }
+
+    .dashboard {
+      background-color: var(--card-bg);
+      border-radius: 0 0 8px 8px;
+      padding: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+
+    .status-card {
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+      background-color: #f9f9f9;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .moisture-card {
+      border-left: 4px solid var(--secondary);
+    }
+
+    .status-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .status-title {
+      font-size: 16px;
+      color: #666;
+      margin: 0;
+    }
+
+    .status-value {
+      font-size: 32px;
+      font-weight: bold;
+      margin: 0;
+    }
+
+    .moisture-level {
+      display: flex;
+      align-items: center;
+      margin-top: 8px;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 20px;
+      background-color: #e0e0e0;
+      border-radius: 10px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+
+    .progress {
+      height: 100%;
+      background-color: var(--secondary);
+      transition: width 0.5s ease-in-out;
+    }
+    
+    .pump-card {
+      border-left: 4px solid var(--primary);
+    }
+
+    .pump-status {
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-weight: bold;
+      transition: all 0.3s ease;
+    }
+
+    .pump-on {
+      background-color: rgba(76, 175, 80, 0.2);
+      color: var(--primary);
+    }
+
+    .pump-off {
+      background-color: rgba(244, 67, 54, 0.1);
+      color: var(--danger);
+    }
+
+    .moisture-icon {
+      font-size: 24px;
+      margin-right: 10px;
+      color: var(--secondary);
+    }
+    
+    .connection-status {
+      text-align: center;
+      padding: 10px;
+      font-size: 14px;
+      color: #666;
+    }
+
+    .pulse {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background-color: var(--primary);
+      margin-right: 8px;
+    }
+
+    .pulse.active {
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7);
+      }
+      
+      70% {
+        transform: scale(1);
+        box-shadow: 0 0 0 6px rgba(76, 175, 80, 0);
+      }
+      
+      100% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(76, 175, 80, 0);
+      }
+    }
+
+    .timestamp {
+      font-size: 12px;
+      color: #999;
+      text-align: right;
+      margin-top: 5px;
+    }
+
+    .loading {
+      opacity: 0.6;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Cloud Soil Moisture Monitor</h1>
+    </header>
+    
+    <div class="dashboard">
+      <div class="status-card moisture-card">
+        <div class="status-header">
+          <h2 class="status-title">Moisture Level</h2>
+          <span class="moisture-icon">💧</span>
+        </div>
+        <p class="status-value" id="moisture-value">{{ moisture }}%</p>
+        <div class="progress-bar">
+          <div class="progress" id="moisture-bar" style="width: {{ moisture }}%;"></div>
+        </div>
+        <div class="moisture-status" id="moisture-status"></div>
+      </div>
+
+      <div class="status-card pump-card">
+        <div class="status-header">
+          <h2 class="status-title">Water Pump Status</h2>
+        </div>
+        <div class="pump-status {{ 'pump-on' if pump_status else 'pump-off' }}" id="pump-status">
+          {{ 'ON - Watering in Progress' if pump_status else 'OFF - Standby' }}
+        </div>
+      </div>
+    </div>
+
+    <div class="connection-status">
+      <span class="pulse active" id="connection-indicator"></span>
+      <span id="connection-text">Connected - Updating in real-time</span>
+    </div>
+    <div class="timestamp" id="last-updated">Last updated: {{ timestamp }}</div>
+  </div>
+
+  <script>
+    // Elements
+    const moistureValue = document.getElementById('moisture-value');
+    const moistureBar = document.getElementById('moisture-bar');
+    const moistureStatus = document.getElementById('moisture-status');
+    const pumpStatus = document.getElementById('pump-status');
+    const lastUpdated = document.getElementById('last-updated');
+    
+    // Update moisture display
+    function updateMoistureUI(value) {
+      moistureBar.style.width = value + '%';
+      
+      // Add classification based on moisture level
+      if (value < 20) {
+        moistureStatus.textContent = 'Very Dry - Needs Water!';
+        moistureBar.style.backgroundColor = '#f44336'; // red
+      } else if (value < 40) {
+        moistureStatus.textContent = 'Dry - Consider Watering';
+        moistureBar.style.backgroundColor = '#ff9800'; // orange
+      } else if (value < 60) {
+        moistureStatus.textContent = 'Moderate Moisture';
+        moistureBar.style.backgroundColor = '#2196F3'; // blue
+      } else if (value < 80) {
+        moistureStatus.textContent = 'Good Moisture Level';
+        moistureBar.style.backgroundColor = '#4CAF50'; // green
+      } else {
+        moistureStatus.textContent = 'Well Watered';
+        moistureBar.style.backgroundColor = '#009688'; // teal
+      }
+    }
+    
+    // Initial UI setup
+    updateMoistureUI({{ moisture }});
+    
+    // Auto-refresh every 5 seconds
+    setTimeout(function() {
+      window.location.reload();
+    }, 5000);
+  </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE, 
+                               moisture=latest_data["moisture"],
+                               pump_status=latest_data["pump_status"],
+                               timestamp=latest_data["timestamp"])
+
+@app.route('/data', methods=['POST'])
+def receive_data():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data received'}), 400
+        
+        # Update latest data
+        latest_data["moisture"] = data.get("moisture", 0)
+        latest_data["pump_status"] = data.get("pump_status", False)
+        latest_data["sensor_value"] = data.get("sensor_value", 0)
+        latest_data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        print(f"Received data: {latest_data}")  # Log to console
+        
+        return jsonify({'message': 'Data received successfully'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5002, debug=True)
+from flask import Flask, request, jsonify, render_template_string
+from datetime import datetime
+from flask_cors import CORS  # Add this import
+
+app = Flask(__name__)
+CORS(app)  # Enable CORS for AJAX requests
+
+# Store the latest data
+latest_data = {
+    "moisture": 0,
+    "pump_status": False,
+    "sensor_value": 0,
+    "timestamp": None
+}
+
+# HTML Template with AJAX implementation
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloud Soil Moisture Monitor</title>
+  <style>
+    /* [Keep all your existing CSS styles exactly the same] */
+    /* They're perfect, no changes needed */
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Cloud Soil Moisture Monitor</h1>
+    </header>
+    
+    <div class="dashboard">
+      <div class="status-card moisture-card">
+        <div class="status-header">
+          <h2 class="status-title">Moisture Level</h2>
+          <span class="moisture-icon">💧</span>
+        </div>
+        <p class="status-value" id="moisture-value">0%</p>
+        <div class="progress-bar">
+          <div class="progress" id="moisture-bar" style="width: 0%;"></div>
+        </div>
+        <div class="moisture-status" id="moisture-status"></div>
+      </div>
+
+      <div class="status-card pump-card">
+        <div class="status-header">
+          <h2 class="status-title">Water Pump Status</h2>
+        </div>
+        <div class="pump-status pump-off" id="pump-status">
+          OFF - Standby
+        </div>
+      </div>
+    </div>
+
+    <div class="connection-status">
+      <span class="pulse active" id="connection-indicator"></span>
+      <span id="connection-text">Connected - Updating in real-time</span>
+    </div>
+    <div class="timestamp" id="last-updated">Last updated: Never</div>
+  </div>
+
+  <script>
+    // Elements
+    const moistureValue = document.getElementById('moisture-value');
+    const moistureBar = document.getElementById('moisture-bar');
+    const moistureStatus = document.getElementById('moisture-status');
+    const pumpStatus = document.getElementById('pump-status');
+    const lastUpdated = document.getElementById('last-updated');
+    const connectionIndicator = document.getElementById('connection-indicator');
+    const connectionText = document.getElementById('connection-text');
+
+    // Format timestamp
+    function formatTime(timestamp) {
+        if (!timestamp) return "Never";
+        const date = new Date(timestamp);
+        return date.toLocaleString();
+    }
+
+    // Update UI with new data
+    function updateUI(data) {
+        // Update moisture display
+        moistureValue.textContent = data.moisture + '%';
+        moistureBar.style.width = data.moisture + '%';
+        
+        // Update moisture status
+        if (data.moisture < 20) {
+            moistureStatus.textContent = 'Very Dry - Needs Water!';
+            moistureBar.style.backgroundColor = '#f44336';
+        } else if (data.moisture < 40) {
+            moistureStatus.textContent = 'Dry - Consider Watering';
+            moistureBar.style.backgroundColor = '#ff9800';
+        } else if (data.moisture < 60) {
+            moistureStatus.textContent = 'Moderate Moisture';
+            moistureBar.style.backgroundColor = '#2196F3';
+        } else if (data.moisture < 80) {
+            moistureStatus.textContent = 'Good Moisture Level';
+            moistureBar.style.backgroundColor = '#4CAF50';
+        } else {
+            moistureStatus.textContent = 'Well Watered';
+            moistureBar.style.backgroundColor = '#009688';
+        }
+
+        // Update pump status
+        if (data.pump_status) {
+            pumpStatus.textContent = 'ON - Watering in Progress';
+            pumpStatus.className = 'pump-status pump-on';
+        } else {
+            pumpStatus.textContent = 'OFF - Standby';
+            pumpStatus.className = 'pump-status pump-off';
+        }
+
+        // Update timestamp
+        lastUpdated.textContent = 'Last updated: ' + formatTime(data.timestamp);
+        
+        // Update connection status
+        connectionIndicator.classList.add('active');
+        connectionText.textContent = 'Connected - Updating in real-time';
+    }
+
+    // Fetch latest data via AJAX
+    function fetchData() {
+        fetch('/get_latest_data')
+            .then(response => {
+                if (!response.ok) throw new Error('Network error');
+                return response.json();
+            })
+            .then(data => {
+                updateUI(data);
+            })
+            .catch(error => {
+                console.error('Error fetching data:', error);
+                connectionIndicator.classList.remove('active');
+                connectionText.textContent = 'Connection error - Retrying...';
+            });
+    }
+
+    // Initial fetch
+    fetchData();
+
+    // Poll every second (adjust as needed)
+    setInterval(fetchData, 1000);
+  </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)  # No initial data needed - AJAX will handle it
+
+@app.route('/data', methods=['POST'])
+def receive_data():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data received'}), 400
+        
+        # Update latest data
+        latest_data.update({
+            "moisture": data.get("moisture", 0),
+            "pump_status": data.get("pump_status", False),
+            "sensor_value": data.get("sensor_value", 0),
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        print(f"Received data: {latest_data}")
+        return jsonify({'message': 'Data received successfully'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get_latest_data', methods=['GET'])
+def get_latest_data():
+    return jsonify(latest_data)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5002, debug=True)
